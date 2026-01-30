@@ -41,9 +41,14 @@
   "nav": {
     "main_navigation": "Main",
     "popular_packages": "Popular packages",
+    "blog": "blog",
     "search": "search",
     "settings": "settings",
     "back": "back"
+  },
+  "blog": {
+    "title": "Blog",
+    "description": "Insights and updates from the npmx community"
   },
   "settings": {
     "title": "settings",
@@ -329,7 +334,7 @@
       "size": "Size",
       "deps": "Deps",
       "updated": "Updated",
-      "install": "Install",
+      "get_started": "Get started",
       "readme": "Readme",
       "maintainers": "Maintainers",
       "keywords": "Keywords",
