@@ -497,10 +497,7 @@ function handleClick(event: MouseEvent) {
   <main class="container flex-1 py-8 xl:py-12">
     <PackageSkeleton v-if="status === 'pending'" />
 
-    <article
-      v-else-if="status === 'success' && pkg"
-      class="package-page motion-safe:animate-fade-in"
-    >
+    <article v-else-if="status === 'success' && pkg" class="package-page">
       <!-- Package header -->
       <header class="area-header border-b border-border">
         <div class="mb-4">
