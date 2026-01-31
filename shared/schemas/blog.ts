@@ -1,18 +1,19 @@
-import * as v from 'valibot'
+import { object, string, optional, array, boolean, pipe, isoDate } from 'valibot'
+import type { InferOutput } from 'valibot'
 
-export const BlogPostSchema = v.object({
-  author: v.string(),
-  title: v.string(),
-  date: v.string(),
-  description: v.string(),
-  slug: v.string(),
-  excerpt: v.optional(v.string()),
-  tags: v.optional(v.array(v.string())),
-  draft: v.optional(v.boolean()),
+export const BlogPostSchema = object({
+  author: string(),
+  title: string(),
+  date: pipe(string(), isoDate()),
+  description: string(),
+  path: string(),
+  excerpt: optional(string()),
+  tags: optional(array(string())),
+  draft: optional(boolean()),
 })
 
 /**
  * Inferred type for blog post frontmatter
  */
 /** @public */
-export type BlogPostFrontmatter = v.InferOutput<typeof BlogPostSchema>
+export type BlogPostFrontmatter = InferOutput<typeof BlogPostSchema>

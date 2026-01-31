@@ -1,31 +1,128 @@
-import { defineNuxtModule, useNuxt } from 'nuxt/kit'
+import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { defineNuxtModule, useNuxt, createResolver } from 'nuxt/kit'
+import { safeParse } from 'valibot'
 import * as site from '../shared/types/lexicons/site'
+import { BlogPostSchema } from '../shared/schemas/blog'
+import { NPMX_SITE } from '../shared/utils/constants'
 
-const PUBLICATION_SITE = 'https://npmx.dev'
+const syncedDocuments = new Map<string, string>()
 
 export default defineNuxtModule({
-  meta: {
-    name: 'standard-site-sync',
-  },
-  setup() {
+  meta: { name: 'standard-site-sync' },
+  async setup() {
     const nuxt = useNuxt()
-    if (nuxt.options._prepare) {
-      return
-    }
-    nuxt.hook('content:file:afterParse', ctx => {
-      const { content } = ctx
+    const { resolve } = createResolver(import.meta.url)
+    const contentDir = resolve('../app/pages/blog')
 
-      const document = site.standard.document.$build({
-        site: PUBLICATION_SITE,
-        path: content.path as string,
-        title: content.title as string,
-        description: (content.excerpt || content.description) as string | undefined,
-        tags: content.tags as string[] | undefined,
-        publishedAt: new Date(content.date as string).toISOString(),
-      })
+    if (nuxt.options._prepare) return
 
-      // TODO: Mock PDS push
-      console.log('[standard-site-sync] Would push:', JSON.stringify(document, null, 2))
+    nuxt.hook('build:before', async () => {
+      const glob = await import('fast-glob').then(m => m.default)
+      const files = await glob(`${contentDir}/**/*.md`)
+
+      for (const file of files) {
+        await syncFile(file, NPMX_SITE)
+      }
+    })
+
+    nuxt.hook('builder:watch', async (_event, path) => {
+      if (path.endsWith('.md')) {
+        await syncFile(resolve(nuxt.options.rootDir, path), NPMX_SITE)
+      }
     })
   },
 })
+
+// TODO: Placeholder algo, can likely be simplified
+function parseBasicFrontmatter(fileContent: string): Record<string, any> {
+  const match = fileContent.match(/^---\r?\n([\s\S]+?)\r?\n---/)
+  if (!match) return {}
+
+  const obj: Record<string, any> = {}
+  const lines = match[1]?.split('\n')
+
+  if (!lines) return {}
+
+  for (const line of lines) {
+    const [key, ...valParts] = line.split(':')
+    if (key && valParts.length) {
+      let value = valParts.join(':').trim()
+
+      // Remove surrounding quotes
+      value = value.replace(/^["']|["']$/g, '')
+
+      // Handle Booleans
+      if (value === 'true') {
+        obj[key.trim()] = true
+        continue
+      }
+      if (value === 'false') {
+        obj[key.trim()] = false
+        continue
+      }
+
+      // Handle basic array [tag1, tag2]
+      if (value.startsWith('[') && value.endsWith(']')) {
+        obj[key.trim()] = value
+          .slice(1, -1)
+          .split(',')
+          .map(s => s.trim().replace(/^["']|["']$/g, ''))
+      } else {
+        obj[key.trim()] = value
+      }
+    }
+  }
+  return obj
+}
+
+const syncFile = async (filePath: string, siteUrl: string) => {
+  try {
+    const fileContent = readFileSync(filePath, 'utf-8')
+    const frontmatter = parseBasicFrontmatter(fileContent)
+
+    // Schema expects 'path' & frontmatter provides 'slug'
+    if (frontmatter.slug) {
+      frontmatter.path = `/blog/${frontmatter.slug}`
+    }
+
+    const result = safeParse(BlogPostSchema, frontmatter)
+    if (!result.success) {
+      console.warn(`[standard-site-sync] Validation failed for ${filePath}`, result.issues)
+      return
+    }
+
+    const data = result.output
+
+    // filter drafts
+    if (data.draft) {
+      if (process.env.DEBUG === 'true') {
+        console.debug(`[standard-site-sync] Skipping draft: ${data.path}`)
+      }
+      return
+    }
+
+    const hash = createHash('sha1').update(JSON.stringify(data)).digest('hex')
+
+    if (syncedDocuments.get(data.path) === hash) {
+      return
+    }
+
+    // TODO: Review later
+    const document = site.standard.document.$build({
+      site: siteUrl as `${string}:${string}`,
+      path: data.path,
+      title: data.title,
+      description: data.description ?? data.excerpt,
+      tags: data.tags,
+      publishedAt: new Date(data.date).toISOString(),
+    })
+
+    console.log('[standard-site-sync] Pushing:', JSON.stringify(document, null, 2))
+    // TODO: Real PDS push
+
+    syncedDocuments.set(data.path, hash)
+  } catch (error) {
+    console.error(`[standard-site-sync] Error in ${filePath}:`, error)
+  }
+}
