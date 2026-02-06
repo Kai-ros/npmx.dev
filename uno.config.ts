@@ -35,6 +35,7 @@ export default defineConfig({
   ].filter(Boolean),
   transformers: [transformerDirectives(), transformerVariantGroup()],
   theme: {
+    spacing: { DEFAULT: '4px' },
     font: {
       mono: "'Geist Mono', monospace",
       sans: "'Geist', system-ui, -apple-system, sans-serif",
@@ -120,10 +121,10 @@ export default defineConfig({
   shortcuts: [
     // Layout
     ['container', 'max-w-6xl mx-auto px-4 sm:px-6'],
-    ['container-sm', 'max-w-4xl mx-auto px-4 sm:px-6'],
+    ['container-sm', 'max-w-5xl mx-auto px-4 sm:px-6'],
 
     // Focus states - subtle but accessible
-    ['focus-ring', 'outline-none focus-visible:(ring-2 ring-fg/10 ring-offset-2)'],
+    ['focus-ring', 'outline-none focus-visible:(ring-2 ring-fg/50 ring-offset-2)'],
 
     // Buttons
     [
@@ -142,11 +143,7 @@ export default defineConfig({
     ],
     ['link-subtle', 'text-fg-muted hover:text-fg transition-colors duration-200 focus-ring'],
 
-    // Tags/badges
-    [
-      'tag',
-      'inline-flex items-center px-2 py-0.5 text-xs font-mono text-fg-muted bg-bg-muted border border-border rounded transition-colors duration-200 hover:(text-fg border-border-hover)',
-    ],
+    // badges
     ['badge-orange', 'bg-badge-orange/10 text-badge-orange'],
     ['badge-yellow', 'bg-badge-yellow/10 text-badge-yellow'],
     ['badge-green', 'bg-badge-green/10 text-badge-green'],
