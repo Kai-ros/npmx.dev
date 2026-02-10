@@ -83,7 +83,7 @@ function onPostMessage(event: MessageEvent) {
   /* INFO: Matches Bluesky's internal max-width */
   max-width: 37.5rem;
   width: 100%;
-  margin: 1.5rem 0;
+  margin: 1.5rem auto;
   /* INFO: Necessary to remove the white 1px line at the bottom of the embed. Also sets border-radius  */
   clip-path: inset(0 0 1px 0 round 0.75rem);
 }
