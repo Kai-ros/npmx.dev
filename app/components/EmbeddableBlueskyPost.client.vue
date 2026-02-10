@@ -62,6 +62,7 @@ function onPostMessage(event: MessageEvent) {
     <!-- Success state -->
     <div v-else-if="embedUrl" class="bluesky-embed-container">
       <iframe
+        title="Bluesky Post"
         :data-bluesky-id="embeddedId"
         :src="embedUrl"
         width="100%"
