@@ -10,7 +10,7 @@ excerpt: 'My first post'
 date: '2026-01-28T15:30:00Z'
 slug: 'first-post'
 description: 'My first post on the blog'
-draft: false
+draft: true
 ---
 
 # Markdown: Syntax
