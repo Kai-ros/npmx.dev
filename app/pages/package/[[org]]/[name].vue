@@ -93,8 +93,6 @@ const navExtraOffsetStyle = computed(() => ({
 }))
 
 const { packageName, requestedVersion, orgName } = usePackageRoute()
-const selectedPM = useSelectedPackageManager()
-const activePmId = computed(() => selectedPM.value ?? 'npm')
 
 if (import.meta.server) {
   assertValidPackageName(packageName.value)
@@ -1128,11 +1126,7 @@ const showSkeleton = shallowRef(false)
           <!-- Package manager dropdown -->
           <PackageManagerSelect />
         </div>
-        <div
-          role="tabpanel"
-          :id="`pm-panel-${activePmId}`"
-          :aria-labelledby="`pm-tab-${activePmId}`"
-        >
+        <div>
           <TerminalExecute
             :package-name="pkg.name"
             :jsr-info="jsrInfo"
@@ -1155,11 +1149,7 @@ const showSkeleton = shallowRef(false)
           <!-- Package manager dropdown -->
           <PackageManagerSelect />
         </div>
-        <div
-          role="tabpanel"
-          :id="`pm-panel-${activePmId}`"
-          :aria-labelledby="`pm-tab-${activePmId}`"
-        >
+        <div>
           <div
             v-if="publishSecurityDowngrade"
             role="alert"
