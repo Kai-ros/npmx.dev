@@ -1,14 +1,21 @@
 <script setup lang="ts">
+import type { IconClass } from '~/types'
+
 const props = withDefaults(
   defineProps<{
     disabled?: boolean
+    /** @default "button" */
     type?: 'button' | 'submit'
+    /** @default "secondary" */
     variant?: 'primary' | 'secondary'
+    /** @default "medium" */
     size?: 'small' | 'medium'
+    /** Keyboard shortcut hint */
     ariaKeyshortcuts?: string
+    /** Forces the button to occupy the entire width of its container. */
     block?: boolean
 
-    classicon?: string
+    classicon?: IconClass
   }>(),
   {
     type: 'button',
@@ -28,7 +35,7 @@ defineExpose({
 <template>
   <button
     ref="el"
-    class="group cursor-pointer gap-x-1 items-center justify-center font-mono border border-border rounded-md transition-all duration-200 disabled:(opacity-40 cursor-not-allowed border-transparent)"
+    class="group gap-x-1 items-center justify-center font-mono border border-border rounded-md transition-all duration-200 disabled:(opacity-40 cursor-not-allowed border-transparent)"
     :class="{
       'inline-flex': !block,
       'flex': block,

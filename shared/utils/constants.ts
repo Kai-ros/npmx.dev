@@ -9,8 +9,9 @@ export const CACHE_MAX_AGE_ONE_YEAR = 60 * 60 * 24 * 365
 
 // API Strings
 export const NPMX_SITE = 'https://npmx.dev'
+export const NPMX_DOCS_SITE = 'https://docs.npmx.dev'
 export const BLUESKY_EMBED_BASE_ROUTE = 'https://embed.bsky.app'
-export const BLUESKY_API = 'https://public.api.bsky.app/'
+export const BLUESKY_API = 'https://public.api.bsky.app'
 export const BLUESKY_COMMENTS_REQUEST = '/api/atproto/bluesky-comments'
 export const NPM_REGISTRY = 'https://registry.npmjs.org'
 export const NPM_API = 'https://api.npmjs.org'
@@ -24,6 +25,8 @@ export const ERROR_BLUESKY_EMBED_FAILED = 'Failed to generate Bluesky embed.'
 export const ERROR_FILE_LIST_FETCH_FAILED = 'Failed to fetch file list.'
 export const ERROR_CALC_INSTALL_SIZE_FAILED = 'Failed to calculate install size.'
 export const NPM_MISSING_README_SENTINEL = 'ERROR: No README data found!'
+/** The npm registry truncates the packument readme field at 65,536 characters (2^16) */
+export const NPM_README_TRUNCATION_THRESHOLD = 64_000
 export const ERROR_JSR_FETCH_FAILED = 'Failed to fetch package from JSR registry.'
 export const ERROR_NPM_FETCH_FAILED = 'Failed to fetch package from npm registry.'
 export const ERROR_PROVENANCE_FETCH_FAILED = 'Failed to fetch provenance.'
@@ -32,9 +35,7 @@ export const ERROR_SUGGESTIONS_FETCH_FAILED = 'Failed to fetch suggestions.'
 export const ERROR_SKILLS_FETCH_FAILED = 'Failed to fetch skills.'
 export const ERROR_SKILL_NOT_FOUND = 'Skill not found.'
 export const ERROR_SKILL_FILE_NOT_FOUND = 'Skill file not found.'
-/** @public */
 export const ERROR_GRAVATAR_FETCH_FAILED = 'Failed to fetch Gravatar profile.'
-/** @public */
 export const ERROR_GRAVATAR_EMAIL_UNAVAILABLE = "User's email not accessible."
 export const ERROR_NEED_REAUTH = 'User needs to reauthenticate'
 
@@ -52,20 +53,22 @@ export const LIKES_SCOPE = `repo:${dev.npmx.feed.like.$nsid}`
 // Theming
 export const ACCENT_COLORS = {
   light: {
-    coral: 'oklch(0.70 0.19 14.75)',
-    amber: 'oklch(0.8 0.25 84.429)',
-    emerald: 'oklch(0.70 0.17 166.95)',
-    sky: 'oklch(0.70 0.15 230.318)',
-    violet: 'oklch(0.70 0.17 286.067)',
-    magenta: 'oklch(0.75 0.18 330)',
+    sky: 'oklch(0.53 0.16 247.27)',
+    coral: 'oklch(0.56 0.17 10.75)',
+    amber: 'oklch(0.58 0.18 46.34)',
+    emerald: 'oklch(0.51 0.13 162.4)',
+    violet: 'oklch(0.56 0.13 282.067)',
+    magenta: 'oklch(0.56 0.14 325)',
+    neutral: 'oklch(0.145 0 0)',
   },
   dark: {
+    sky: 'oklch(0.787 0.128 230.318)',
     coral: 'oklch(0.704 0.177 14.75)',
     amber: 'oklch(0.828 0.165 84.429)',
     emerald: 'oklch(0.792 0.153 166.95)',
-    sky: 'oklch(0.787 0.128 230.318)',
     violet: 'oklch(0.78 0.148 286.067)',
     magenta: 'oklch(0.78 0.15 330)',
+    neutral: 'oklch(1 0 0)',
   },
 } as const
 
