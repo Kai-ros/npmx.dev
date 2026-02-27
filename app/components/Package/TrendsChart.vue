@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import type { VueUiXyDatasetItem } from 'vue-data-ui'
+import type { Theme as VueDataUiTheme, VueUiXyConfig, VueUiXyDatasetItem } from 'vue-data-ui'
 import { VueUiXy } from 'vue-data-ui/vue-ui-xy'
 import { useDebounceFn, useElementSize } from '@vueuse/core'
 import { useCssVariables } from '~/composables/useColors'
-import { OKLCH_NEUTRAL_FALLBACK, transparentizeOklch } from '~/utils/colors'
+import { OKLCH_NEUTRAL_FALLBACK, transparentizeOklch, lightenOklch } from '~/utils/colors'
 import { getFrameworkColor, isListedFramework } from '~/utils/frameworks'
 import { drawNpmxLogoAndTaglineWatermark } from '~/composables/useChartWatermark'
+import type { RepoRef } from '#shared/utils/git-providers'
 import type {
   ChartTimeGranularity,
   DailyDataPoint,
@@ -16,6 +17,10 @@ import type {
   WeeklyDataPoint,
   YearlyDataPoint,
 } from '~/types/chart'
+import { DATE_INPUT_MAX } from '~/utils/input'
+import { applyDataCorrection } from '~/utils/chart-data-correction'
+import { applyBlocklistCorrection, getAnomaliesForPackages } from '~/utils/download-anomalies'
+import { copyAltTextForTrendLineChart } from '~/utils/charts'
 
 const props = withDefaults(
   defineProps<{
@@ -34,6 +39,7 @@ const props = withDefaults(
      * Used when `weeklyDownloads` is not provided.
      */
     packageNames?: string[]
+    repoRef?: RepoRef | null | undefined
     createdIso?: string | null
 
     /** When true, shows facet selector (e.g. Downloads / Likes). */
@@ -47,6 +53,9 @@ const props = withDefaults(
 
 const { locale } = useI18n()
 const { accentColors, selectedAccentColor } = useAccentColor()
+const { settings } = useSettings()
+const { copy, copied } = useClipboard()
+
 const colorMode = useColorMode()
 const resolvedMode = shallowRef<'light' | 'dark'>('light')
 const rootEl = shallowRef<HTMLElement | null>(null)
@@ -198,59 +207,41 @@ function formatXyDataset(
   dataset: EvolutionData,
   seriesName: string,
 ): { dataset: VueUiXyDatasetItem[] | null; dates: number[] } {
+  const lightColor = isDarkMode.value ? lightenOklch(accent.value, 0.618) : undefined
+
+  // Subtle path gradient applied in dark mode only
+  const temperatureColors = lightColor ? [lightColor, accent.value] : undefined
+
+  const datasetItem: VueUiXyDatasetItem = {
+    name: seriesName,
+    type: 'line',
+    series: dataset.map(d => d.value),
+    color: accent.value,
+    temperatureColors,
+    useArea: true,
+  }
+
   if (selectedGranularity === 'weekly' && isWeeklyDataset(dataset)) {
     return {
-      dataset: [
-        {
-          name: seriesName,
-          type: 'line',
-          series: dataset.map(d => d.value),
-          color: accent.value,
-          useArea: true,
-        },
-      ],
+      dataset: [datasetItem],
       dates: dataset.map(d => d.timestampEnd),
     }
   }
   if (selectedGranularity === 'daily' && isDailyDataset(dataset)) {
     return {
-      dataset: [
-        {
-          name: seriesName,
-          type: 'line',
-          series: dataset.map(d => d.value),
-          color: accent.value,
-          useArea: true,
-        },
-      ],
+      dataset: [datasetItem],
       dates: dataset.map(d => d.timestamp),
     }
   }
   if (selectedGranularity === 'monthly' && isMonthlyDataset(dataset)) {
     return {
-      dataset: [
-        {
-          name: seriesName,
-          type: 'line',
-          series: dataset.map(d => d.value),
-          color: accent.value,
-          useArea: true,
-        },
-      ],
+      dataset: [datasetItem],
       dates: dataset.map(d => d.timestamp),
     }
   }
   if (selectedGranularity === 'yearly' && isYearlyDataset(dataset)) {
     return {
-      dataset: [
-        {
-          name: seriesName,
-          type: 'line',
-          series: dataset.map(d => d.value),
-          color: accent.value,
-          useArea: true,
-        },
-      ],
+      dataset: [datasetItem],
       dates: dataset.map(d => d.timestamp),
     }
   }
@@ -331,6 +322,32 @@ const effectivePackageNames = computed<string[]>(() => {
   return single ? [single] : []
 })
 
+const {
+  fetchPackageDownloadEvolution,
+  fetchPackageLikesEvolution,
+  fetchRepoContributorsEvolution,
+  fetchRepoRefsForPackages,
+} = useCharts()
+
+const repoRefsByPackage = shallowRef<Record<string, RepoRef | null>>({})
+const repoRefsRequestToken = shallowRef(0)
+
+watch(
+  () => effectivePackageNames.value,
+  async names => {
+    if (!import.meta.client) return
+    if (!isMultiPackageMode.value) {
+      repoRefsByPackage.value = {}
+      return
+    }
+    const currentToken = ++repoRefsRequestToken.value
+    const refs = await fetchRepoRefsForPackages(names)
+    if (currentToken !== repoRefsRequestToken.value) return
+    repoRefsByPackage.value = refs
+  },
+  { immediate: true },
+)
+
 const selectedGranularity = usePermalink<ChartTimeGranularity>('granularity', DEFAULT_GRANULARITY, {
   permanent: props.permalink,
 })
@@ -360,9 +377,10 @@ const isEndDateOnPeriodEnd = computed(() => {
 const isEstimationGranularity = computed(
   () => displayedGranularity.value === 'monthly' || displayedGranularity.value === 'yearly',
 )
-const shouldRenderEstimationOverlay = computed(
-  () => !pending.value && isEstimationGranularity.value,
+const supportsEstimation = computed(
+  () => isEstimationGranularity.value && selectedMetric.value !== 'contributors',
 )
+const shouldRenderEstimationOverlay = computed(() => !pending.value && supportsEstimation.value)
 
 const startDate = usePermalink<string>('start', '', {
   permanent: props.permalink,
@@ -570,34 +588,111 @@ function applyDateRange<T extends Record<string, unknown>>(base: T): T & DateRan
   return next
 }
 
-const { fetchPackageDownloadEvolution, fetchPackageLikesEvolution } = useCharts()
-
-type MetricId = 'downloads' | 'likes'
+type MetricId = 'downloads' | 'likes' | 'contributors'
 const DEFAULT_METRIC_ID: MetricId = 'downloads'
+
+type MetricContext = {
+  packageName: string
+  repoRef?: RepoRef | null
+}
 
 type MetricDef = {
   id: MetricId
   label: string
-  fetch: (pkg: string, options: EvolutionOptions) => Promise<EvolutionData>
+  fetch: (context: MetricContext, options: EvolutionOptions) => Promise<EvolutionData>
+  supportsMulti?: boolean
 }
 
-const METRICS = computed<MetricDef[]>(() => [
-  {
-    id: 'downloads',
-    label: $t('package.trends.items.downloads'),
-    fetch: (pkg, opts) =>
-      fetchPackageDownloadEvolution(pkg, props.createdIso ?? null, opts) as Promise<EvolutionData>,
-  },
-  {
-    id: 'likes',
-    label: $t('package.trends.items.likes'),
-    fetch: (pkg, opts) => fetchPackageLikesEvolution(pkg, opts) as Promise<EvolutionData>,
-  },
-])
+const hasContributorsFacet = computed(() => {
+  if (isMultiPackageMode.value) {
+    return Object.values(repoRefsByPackage.value).some(ref => ref?.provider === 'github')
+  }
+  const ref = props.repoRef
+  return ref?.provider === 'github' && ref.owner && ref.repo
+})
+
+const METRICS = computed<MetricDef[]>(() => {
+  const metrics: MetricDef[] = [
+    {
+      id: 'downloads',
+      label: $t('package.trends.items.downloads'),
+      fetch: ({ packageName }, opts) =>
+        fetchPackageDownloadEvolution(
+          packageName,
+          props.createdIso ?? null,
+          opts,
+        ) as Promise<EvolutionData>,
+      supportsMulti: true,
+    },
+    {
+      id: 'likes',
+      label: $t('package.trends.items.likes'),
+      fetch: ({ packageName }, opts) => fetchPackageLikesEvolution(packageName, opts),
+      supportsMulti: true,
+    },
+  ]
+
+  if (hasContributorsFacet.value) {
+    metrics.push({
+      id: 'contributors',
+      label: $t('package.trends.items.contributors'),
+      fetch: ({ repoRef }, opts) => fetchRepoContributorsEvolution(repoRef, opts),
+      supportsMulti: true,
+    })
+  }
+
+  return metrics
+})
 
 const selectedMetric = usePermalink<MetricId>('facet', DEFAULT_METRIC_ID, {
   permanent: props.permalink,
 })
+
+const effectivePackageNamesForMetric = computed<string[]>(() => {
+  if (!isMultiPackageMode.value) return effectivePackageNames.value
+  if (selectedMetric.value !== 'contributors') return effectivePackageNames.value
+  return effectivePackageNames.value.filter(
+    name => repoRefsByPackage.value[name]?.provider === 'github',
+  )
+})
+
+const skippedPackagesWithoutGitHub = computed(() => {
+  if (!isMultiPackageMode.value) return []
+  if (selectedMetric.value !== 'contributors') return []
+  if (!effectivePackageNames.value.length) return []
+
+  return effectivePackageNames.value.filter(
+    name => repoRefsByPackage.value[name]?.provider !== 'github',
+  )
+})
+
+const availableGranularities = computed<ChartTimeGranularity[]>(() => {
+  if (selectedMetric.value === 'contributors') {
+    return ['weekly', 'monthly', 'yearly']
+  }
+
+  return ['daily', 'weekly', 'monthly', 'yearly']
+})
+
+watch(
+  () => [selectedMetric.value, availableGranularities.value] as const,
+  () => {
+    if (!availableGranularities.value.includes(selectedGranularity.value)) {
+      selectedGranularity.value = 'weekly'
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => METRICS.value,
+  metrics => {
+    if (!metrics.some(m => m.id === selectedMetric.value)) {
+      selectedMetric.value = DEFAULT_METRIC_ID
+    }
+  },
+  { immediate: true },
+)
 
 // Per-metric state keyed by metric id
 const metricStates = reactive<
@@ -623,10 +718,18 @@ const metricStates = reactive<
     evolutionsByPackage: {},
     requestToken: 0,
   },
+  contributors: {
+    pending: false,
+    evolution: [],
+    evolutionsByPackage: {},
+    requestToken: 0,
+  },
 })
 
 const activeMetricState = computed(() => metricStates[selectedMetric.value])
-const activeMetricDef = computed(() => METRICS.value.find(m => m.id === selectedMetric.value)!)
+const activeMetricDef = computed(
+  () => METRICS.value.find(m => m.id === selectedMetric.value) ?? METRICS.value[0],
+)
 const pending = computed(() => activeMetricState.value.pending)
 
 const isMounted = shallowRef(false)
@@ -694,21 +797,33 @@ watch(
 async function loadMetric(metricId: MetricId) {
   if (!import.meta.client) return
 
-  const packageNames = effectivePackageNames.value
-  if (!packageNames.length) return
-
   const state = metricStates[metricId]
   const metric = METRICS.value.find(m => m.id === metricId)!
   const currentToken = ++state.requestToken
   state.pending = true
 
-  const fetchFn = (pkg: string) => metric.fetch(pkg, options.value)
+  const fetchFn = (context: MetricContext) => metric.fetch(context, options.value)
 
   try {
+    const packageNames = effectivePackageNamesForMetric.value
+    if (!packageNames.length) {
+      if (isMultiPackageMode.value) state.evolutionsByPackage = {}
+      else state.evolution = []
+      displayedGranularity.value = selectedGranularity.value
+      return
+    }
+
     if (isMultiPackageMode.value) {
+      if (metric.supportsMulti === false) {
+        state.evolutionsByPackage = {}
+        displayedGranularity.value = selectedGranularity.value
+        return
+      }
+
       const settled = await Promise.allSettled(
         packageNames.map(async pkg => {
-          const result = await fetchFn(pkg)
+          const repoRef = metricId === 'contributors' ? repoRefsByPackage.value[pkg] : null
+          const result = await fetchFn({ packageName: pkg, repoRef })
           return { pkg, result: (result ?? []) as EvolutionData }
         }),
       )
@@ -749,7 +864,7 @@ async function loadMetric(metricId: MetricId) {
       }
     }
 
-    const result = await fetchFn(pkg)
+    const result = await fetchFn({ packageName: pkg, repoRef: props.repoRef })
     if (currentToken !== state.requestToken) return
 
     state.evolution = (result ?? []) as EvolutionData
@@ -777,9 +892,13 @@ const debouncedLoadNow = useDebounceFn(() => {
 const fetchTriggerKey = computed(() => {
   const names = effectivePackageNames.value.join(',')
   const o = options.value
+  const repoKey = props.repoRef
+    ? `${props.repoRef.provider}:${props.repoRef.owner}/${props.repoRef.repo}`
+    : ''
   return [
     isMultiPackageMode.value ? 'M' : 'S',
     names,
+    repoKey,
     String(props.createdIso ?? ''),
     String(o.granularity ?? ''),
     String('weeks' in o ? (o.weeks ?? '') : ''),
@@ -799,17 +918,49 @@ watch(
   { flush: 'post' },
 )
 
+watch(
+  () => repoRefsByPackage.value,
+  () => {
+    if (!import.meta.client) return
+    if (!isMounted.value) return
+    if (!isMultiPackageMode.value) return
+    if (selectedMetric.value !== 'contributors') return
+    debouncedLoadNow()
+  },
+  { deep: true },
+)
+
 const effectiveDataSingle = computed<EvolutionData>(() => {
   const state = activeMetricState.value
+  let data: EvolutionData
   if (
     selectedMetric.value === DEFAULT_METRIC_ID &&
     displayedGranularity.value === DEFAULT_GRANULARITY &&
     props.weeklyDownloads?.length
   ) {
-    if (isWeeklyDataset(state.evolution) && state.evolution.length) return state.evolution
-    return props.weeklyDownloads
+    data =
+      isWeeklyDataset(state.evolution) && state.evolution.length
+        ? state.evolution
+        : props.weeklyDownloads
+  } else {
+    data = state.evolution
   }
-  return state.evolution
+
+  if (isDownloadsMetric.value && data.length) {
+    const pkg = effectivePackageNames.value[0] ?? props.packageName ?? ''
+    if (settings.value.chartFilter.anomaliesFixed) {
+      data = applyBlocklistCorrection({
+        data,
+        packageName: pkg,
+        granularity: displayedGranularity.value,
+      })
+    }
+    return applyDataCorrection(
+      data as Array<{ value: number }>,
+      settings.value.chartFilter,
+    ) as EvolutionData
+  }
+  return data
 })
 
 /**
@@ -836,14 +987,23 @@ const chartData = computed<{
   }
 
   const state = activeMetricState.value
-  const names = effectivePackageNames.value
+  const names = effectivePackageNamesForMetric.value
   const granularity = displayedGranularity.value
 
   const timestampSet = new Set<number>()
   const pointsByPackage = new Map<string, Array<{ timestamp: number; value: number }>>()
 
   for (const pkg of names) {
-    const data = state.evolutionsByPackage[pkg] ?? []
+    let data = state.evolutionsByPackage[pkg] ?? []
+    if (isDownloadsMetric.value && data.length) {
+      if (settings.value.chartFilter.anomaliesFixed) {
+        data = applyBlocklistCorrection({ data, packageName: pkg, granularity })
+      }
+      data = applyDataCorrection(
+        data as Array<{ value: number }>,
+        settings.value.chartFilter,
+      ) as EvolutionData
+    }
     const points = extractSeriesPoints(granularity, data)
     pointsByPackage.set(pkg, points)
     for (const p of points) timestampSet.add(p.timestamp)
@@ -876,9 +1036,15 @@ const chartData = computed<{
 
 const normalisedDataset = computed(() => {
   return chartData.value.dataset?.map(d => {
+    const lastValue = d.series.at(-1) ?? 0
+
+    // Contributors is an absolute metric: keep the partial period value as-is.
+    const projectedLastValue =
+      selectedMetric.value === 'contributors' ? lastValue : extrapolateLastValue(lastValue)
+
     return {
       ...d,
-      series: [...d.series.slice(0, -1), extrapolateLastValue(d.series.at(-1) ?? 0)],
+      series: [...d.series.slice(0, -1), projectedLastValue],
     }
   })
 })
@@ -934,6 +1100,13 @@ const granularityLabels = computed(() => ({
 function getGranularityLabel(granularity: ChartTimeGranularity) {
   return granularityLabels.value[granularity]
 }
+
+const granularityItems = computed(() =>
+  availableGranularities.value.map(granularity => ({
+    label: granularityLabels.value[granularity],
+    value: granularity,
+  })),
+)
 
 function clampRatio(value: number): number {
   if (value < 0) return 0
@@ -1051,6 +1224,8 @@ function getCompletionRatioForBucket(params: {
  * or the original `lastValue` when no extrapolation should be applied.
  */
 function extrapolateLastValue(lastValue: number) {
+  if (selectedMetric.value === 'contributors') return lastValue
+
   if (displayedGranularity.value !== 'monthly' && displayedGranularity.value !== 'yearly')
     return lastValue
 
@@ -1113,20 +1288,20 @@ function drawEstimationLine(svg: Record<string, any>) {
 
     lines.push(`
       <line
-        x1="${previousPoint.x}" 
-        y1="${previousPoint.y}" 
-        x2="${lastPoint.x}" 
-        y2="${lastPoint.y}" 
-        stroke="${colors.value.bg}" 
+        x1="${previousPoint.x}"
+        y1="${previousPoint.y}"
+        x2="${lastPoint.x}"
+        y2="${lastPoint.y}"
+        stroke="${colors.value.bg}"
         stroke-width="3"
         opacity="1"
       />
-      <line 
-        x1="${previousPoint.x}" 
-        y1="${previousPoint.y}" 
-        x2="${lastPoint.x}" 
-        y2="${lastPoint.y}" 
-        stroke="${stroke}" 
+      <line
+        x1="${previousPoint.x}"
+        y1="${previousPoint.y}"
+        x2="${lastPoint.x}"
+        y2="${lastPoint.y}"
+        stroke="${stroke}"
         stroke-width="3"
         stroke-dasharray="4 8"
         stroke-linecap="round"
@@ -1233,13 +1408,9 @@ function drawSvgPrintLegend(svg: Record<string, any>) {
   })
 
   // Inject the estimation legend item when necessary
-  if (
-    ['monthly', 'yearly'].includes(displayedGranularity.value) &&
-    !isEndDateOnPeriodEnd.value &&
-    !isZoomed.value
-  ) {
+  if (supportsEstimation.value && !isEndDateOnPeriodEnd.value && !isZoomed.value) {
     seriesNames.push(`
-        <line 
+        <line
           x1="${svg.drawingArea.left + 12}"
           y1="${svg.drawingArea.top + 24 * data.length}"
           x2="${svg.drawingArea.left + 24}"
@@ -1268,13 +1439,13 @@ function drawSvgPrintLegend(svg: Record<string, any>) {
 }
 
 // VueUiXy chart component configuration
-const chartConfig = computed(() => {
+const chartConfig = computed<VueUiXyConfig>(() => {
   return {
-    theme: isDarkMode.value ? 'dark' : 'default',
+    theme: isDarkMode.value ? 'dark' : ('' as VueDataUiTheme),
     chart: {
       height: isMobile.value ? 950 : 600,
       backgroundColor: colors.value.bg,
-      padding: { bottom: displayedGranularity.value === 'yearly' ? 84 : 64, right: 100 }, // padding right is set to leave space of last datapoint label(s)
+      padding: { bottom: displayedGranularity.value === 'yearly' ? 84 : 64, right: 128 }, // padding right is set to leave space of last datapoint label(s)
       userOptions: {
         buttons: {
           pdf: false,
@@ -1282,18 +1453,24 @@ const chartConfig = computed(() => {
           fullscreen: false,
           table: false,
           tooltip: false,
+          altCopy: true,
         },
         buttonTitles: {
           csv: $t('package.trends.download_file', { fileType: 'CSV' }),
           img: $t('package.trends.download_file', { fileType: 'PNG' }),
           svg: $t('package.trends.download_file', { fileType: 'SVG' }),
           annotator: $t('package.trends.toggle_annotator'),
+          stack: $t('package.trends.toggle_stack_mode'),
+          altCopy: $t('package.trends.copy_alt.button_label'), // Do not make this text dependant on the `copied` variable, since this would re-render the component, which is undesirable if the minimap was used to select a time frame.
         },
         callbacks: {
-          img: ({ imageUri }: { imageUri: string }) => {
+          img: args => {
+            const imageUri = args?.imageUri
+            if (!imageUri) return
             loadFile(imageUri, buildExportFilename('png'))
           },
-          csv: (csvStr: string) => {
+          csv: csvStr => {
+            if (!csvStr) return
             const PLACEHOLDER_CHAR = '\0'
             const multilineDateTemplate = $t('package.trends.date_range_multiline', {
               start: PLACEHOLDER_CHAR,
@@ -1310,11 +1487,29 @@ const chartConfig = computed(() => {
             loadFile(url, buildExportFilename('csv'))
             URL.revokeObjectURL(url)
           },
-          svg: ({ blob }: { blob: Blob }) => {
+          svg: args => {
+            const blob = args?.blob
+            if (!blob) return
             const url = URL.createObjectURL(blob)
             loadFile(url, buildExportFilename('svg'))
             URL.revokeObjectURL(url)
           },
+          altCopy: ({ dataset: dst, config: cfg }) =>
+            copyAltTextForTrendLineChart({
+              dataset: dst,
+              config: {
+                ...cfg,
+                formattedDatasetValues: (dst?.lines || []).map(d =>
+                  d.series.map(n => compactNumberFormatter.value.format(n ?? 0)),
+                ),
+                hasEstimation:
+                  supportsEstimation.value && !isEndDateOnPeriodEnd.value && !isZoomed.value,
+                granularity: displayedGranularity.value,
+                copy,
+                $t,
+                numberFormatter: compactNumberFormatter.value.format,
+              },
+            }),
         },
       },
       grid: {
@@ -1326,7 +1521,7 @@ const chartConfig = computed(() => {
           axis: {
             yLabel: $t('package.trends.y_axis_label', {
               granularity: getGranularityLabel(selectedGranularity.value),
-              facet: activeMetricDef.value.label,
+              facet: activeMetricDef.value?.label,
             }),
             yLabelOffsetX: 12,
             fontSize: isMobile.value ? 32 : 24,
@@ -1368,10 +1563,9 @@ const chartConfig = computed(() => {
         borderColor: 'transparent',
         backdropFilter: false,
         backgroundColor: 'transparent',
-        customFormat: ({ datapoint }: { datapoint: Record<string, any> | any[] }) => {
-          if (!datapoint) return ''
+        customFormat: ({ datapoint: items }) => {
+          if (!items || pending.value) return ''
 
-          const items = Array.isArray(datapoint) ? datapoint : [datapoint[0]]
           const hasMultipleItems = items.length > 1
 
           const rows = items
@@ -1415,12 +1609,16 @@ const chartConfig = computed(() => {
       zoom: {
         maxWidth: isMobile.value ? 350 : 500,
         highlightColor: colors.value.bgElevated,
+        useResetSlot: true,
         minimap: {
           show: true,
           lineColor: '#FAFAFA',
           selectedColor: accent.value,
           selectedColorOpacity: 0.06,
           frameColor: colors.value.border,
+          handleWidth: isMobile.value ? 40 : 20, // does not affect the size of the touch area
+          handleBorderColor: colors.value.fgSubtle,
+          handleType: 'grab', // 'empty' | 'chevron' | 'arrow' | 'grab'
         },
         preview: {
           fill: transparentizeOklch(accent.value, isDarkMode.value ? 0.95 : 0.92),
@@ -1432,6 +1630,23 @@ const chartConfig = computed(() => {
     },
   }
 })
+
+const isDownloadsMetric = computed(() => selectedMetric.value === 'downloads')
+const showCorrectionControls = shallowRef(false)
+
+const packageAnomalies = computed(() => getAnomaliesForPackages(effectivePackageNames.value))
+const hasAnomalies = computed(() => packageAnomalies.value.length > 0)
+
+function formatAnomalyDate(dateStr: string) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  if (!y || !m || !d) return dateStr
+  return new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(y, m - 1, d)))
+}
 
 // Trigger data loading when the metric is switched
 watch(selectedMetric, value => {
@@ -1452,6 +1667,7 @@ watch(selectedMetric, value => {
           v-if="showFacetSelector"
           id="trends-metric-select"
           v-model="selectedMetric"
+          :disabled="activeMetricState.pending"
           :items="METRICS.map(m => ({ label: m.label, value: m.id }))"
           :label="$t('package.trends.facet')"
         />
@@ -1461,12 +1677,7 @@ watch(selectedMetric, value => {
           id="granularity"
           v-model="selectedGranularity"
           :disabled="activeMetricState.pending"
-          :items="[
-            { label: $t('package.trends.granularity_daily'), value: 'daily' },
-            { label: $t('package.trends.granularity_weekly'), value: 'weekly' },
-            { label: $t('package.trends.granularity_monthly'), value: 'monthly' },
-            { label: $t('package.trends.granularity_yearly'), value: 'yearly' },
-          ]"
+          :items="granularityItems"
         />
 
         <div class="grid grid-cols-2 gap-2 flex-1">
@@ -1479,14 +1690,14 @@ watch(selectedMetric, value => {
             </label>
             <div class="relative flex items-center">
               <span
-                class="absolute inset-is-2 i-carbon:calendar w-4 h-4 text-fg-subtle shrink-0 pointer-events-none"
+                class="absolute inset-is-2 i-lucide:calendar w-4 h-4 text-fg-subtle shrink-0 pointer-events-none"
                 aria-hidden="true"
               />
               <InputBase
                 id="startDate"
                 v-model="startDate"
-                :disabled="activeMetricState.pending"
                 type="date"
+                :max="DATE_INPUT_MAX"
                 class="w-full min-w-0 bg-transparent ps-7"
                 size="medium"
               />
@@ -1499,14 +1710,14 @@ watch(selectedMetric, value => {
             </label>
             <div class="relative flex items-center">
               <span
-                class="absolute inset-is-2 i-carbon:calendar w-4 h-4 text-fg-subtle shrink-0 pointer-events-none"
+                class="absolute inset-is-2 i-lucide:calendar w-4 h-4 text-fg-subtle shrink-0 pointer-events-none"
                 aria-hidden="true"
               />
               <InputBase
                 id="endDate"
                 v-model="endDate"
-                :disabled="activeMetricState.pending"
                 type="date"
+                :max="DATE_INPUT_MAX"
                 class="w-full min-w-0 bg-transparent ps-7"
                 size="medium"
               />
@@ -1518,20 +1729,140 @@ watch(selectedMetric, value => {
           v-if="showResetButton"
           type="button"
           aria-label="Reset date range"
-          class="self-end flex items-center justify-center px-2.5 py-1.75 border border-transparent rounded-md text-fg-subtle hover:text-fg transition-colors hover:border-border focus-visible:outline-accent/70 sm:mb-0"
+          class="self-end flex items-center justify-center px-2.5 py-2.25 border border-transparent rounded-md text-fg-subtle hover:text-fg transition-colors hover:border-border focus-visible:outline-accent/70 sm:mb-0"
           @click="resetDateRange"
         >
-          <span class="i-carbon:reset w-5 h-5" aria-hidden="true" />
+          <span class="block i-lucide:undo-2 w-5 h-5" aria-hidden="true" />
         </button>
       </div>
+
+      <!-- Download filter controls -->
+      <div v-if="isDownloadsMetric" class="flex flex-col gap-2">
+        <button
+          type="button"
+          class="self-start flex items-center gap-1 text-2xs font-mono text-fg-subtle hover:text-fg transition-colors"
+          @click="showCorrectionControls = !showCorrectionControls"
+        >
+          <span
+            class="w-3.5 h-3.5 transition-transform"
+            :class="showCorrectionControls ? 'i-lucide:chevron-down' : 'i-lucide:chevron-right'"
+            aria-hidden="true"
+          />
+          {{ $t('package.trends.data_correction') }}
+        </button>
+        <div v-if="showCorrectionControls" class="flex items-end gap-3">
+          <label class="flex flex-col gap-1 flex-1">
+            <span class="text-2xs font-mono text-fg-subtle tracking-wide uppercase">
+              {{ $t('package.trends.average_window') }}
+              <span class="text-fg-muted">({{ settings.chartFilter.averageWindow }})</span>
+            </span>
+            <input
+              v-model.number="settings.chartFilter.averageWindow"
+              type="range"
+              min="0"
+              max="20"
+              step="1"
+              class="accent-[var(--accent-color,var(--fg-subtle))]"
+            />
+          </label>
+          <label class="flex flex-col gap-1 flex-1">
+            <span class="text-2xs font-mono text-fg-subtle tracking-wide uppercase">
+              {{ $t('package.trends.smoothing') }}
+              <span class="text-fg-muted">({{ settings.chartFilter.smoothingTau }})</span>
+            </span>
+            <input
+              v-model.number="settings.chartFilter.smoothingTau"
+              type="range"
+              min="0"
+              max="20"
+              step="1"
+              class="accent-[var(--accent-color,var(--fg-subtle))]"
+            />
+          </label>
+          <div class="flex flex-col gap-1 shrink-0">
+            <span
+              class="text-2xs font-mono text-fg-subtle tracking-wide uppercase flex items-center justify-between"
+            >
+              {{ $t('package.trends.known_anomalies') }}
+              <TooltipApp interactive :to="inModal ? '#chart-modal' : undefined">
+                <button
+                  type="button"
+                  class="i-lucide:info w-3.5 h-3.5 text-fg-muted cursor-help"
+                  :aria-label="$t('package.trends.known_anomalies')"
+                />
+                <template #content>
+                  <div class="flex flex-col gap-3">
+                    <p class="text-xs text-fg-muted">
+                      {{ $t('package.trends.known_anomalies_description') }}
+                    </p>
+                    <div v-if="hasAnomalies">
+                      <p class="text-xs text-fg-subtle font-medium">
+                        {{ $t('package.trends.known_anomalies_ranges') }}
+                      </p>
+                      <ul class="text-xs text-fg-subtle list-disc list-inside">
+                        <li v-for="a in packageAnomalies" :key="`${a.packageName}-${a.start}`">
+                          {{
+                            isMultiPackageMode
+                              ? $t('package.trends.known_anomalies_range_named', {
+                                  packageName: a.packageName,
+                                  start: formatAnomalyDate(a.start),
+                                  end: formatAnomalyDate(a.end),
+                                })
+                              : $t('package.trends.known_anomalies_range', {
+                                  start: formatAnomalyDate(a.start),
+                                  end: formatAnomalyDate(a.end),
+                                })
+                          }}
+                        </li>
+                      </ul>
+                    </div>
+                    <p v-else class="text-xs text-fg-muted">
+                      {{ $t('package.trends.known_anomalies_none', effectivePackageNames.length) }}
+                    </p>
+                    <div class="flex justify-end">
+                      <LinkBase
+                        to="https://github.com/npmx-dev/npmx.dev/edit/main/app/utils/download-anomalies.data.ts"
+                        class="text-xs text-accent"
+                      >
+                        {{ $t('package.trends.known_anomalies_contribute') }}
+                      </LinkBase>
+                    </div>
+                  </div>
+                </template>
+              </TooltipApp>
+            </span>
+            <label
+              class="flex items-center gap-1.5 text-2xs font-mono text-fg-subtle cursor-pointer"
+              :class="{ 'opacity-50 pointer-events-none': !hasAnomalies }"
+            >
+              <input
+                v-model="settings.chartFilter.anomaliesFixed"
+                type="checkbox"
+                :disabled="!hasAnomalies"
+                class="accent-[var(--accent-color,var(--fg-subtle))]"
+              />
+              {{ $t('package.trends.apply_correction') }}
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <p v-if="skippedPackagesWithoutGitHub.length > 0" class="text-2xs font-mono text-fg-subtle">
+        {{ $t('package.trends.contributors_skip', { count: skippedPackagesWithoutGitHub.length }) }}
+        {{ skippedPackagesWithoutGitHub.join(', ') }}
+      </p>
     </div>
 
     <h2 id="trends-chart-title" class="sr-only">
-      {{ $t('package.trends.title') }} — {{ activeMetricDef.label }}
+      {{ $t('package.trends.title') }} — {{ activeMetricDef?.label }}
     </h2>
 
     <!-- Chart panel (active metric) -->
-    <div role="region" aria-labelledby="trends-chart-title" class="min-h-[260px]">
+    <div
+      role="region"
+      aria-labelledby="trends-chart-title"
+      :class="isMobile === false && width > 0 ? 'min-h-[567px]' : 'min-h-[260px]'"
+    >
       <ClientOnly v-if="chartData.dataset">
         <div :data-pending="pending" :data-minimap-visible="maxDatapoints > 6">
           <VueUiXy
@@ -1546,12 +1877,7 @@ watch(selectedMetric, value => {
             <template #svg="{ svg }">
               <!-- Estimation lines for monthly & yearly granularities when the end date induces a downwards trend -->
               <g
-                v-if="
-                  !pending &&
-                  ['monthly', 'yearly'].includes(displayedGranularity) &&
-                  !isEndDateOnPeriodEnd &&
-                  !isZoomed
-                "
+                v-if="shouldRenderEstimationOverlay && !isEndDateOnPeriodEnd && !isZoomed"
                 v-html="drawEstimationLine(svg)"
               />
 
@@ -1629,10 +1955,7 @@ watch(selectedMetric, value => {
                 </template>
 
                 <!-- Estimation extra legend item -->
-                <div
-                  class="flex gap-1 place-items-center"
-                  v-if="['monthly', 'yearly'].includes(selectedGranularity)"
-                >
+                <div class="flex gap-1 place-items-center" v-if="supportsEstimation">
                   <svg viewBox="0 0 20 2" width="20">
                     <line
                       x1="0"
@@ -1649,59 +1972,60 @@ watch(selectedMetric, value => {
               </div>
             </template>
 
+            <!-- Custom minimap reset button -->
+            <template #reset-action="{ reset: resetMinimap }">
+              <button
+                type="button"
+                aria-label="reset minimap"
+                class="absolute inset-is-1/2 -translate-x-1/2 -bottom-18 sm:inset-is-unset sm:translate-x-0 sm:bottom-auto sm:-inset-ie-20 sm:-top-3 flex items-center justify-center px-2.5 py-1.75 border border-transparent rounded-md text-fg-subtle hover:text-fg transition-colors hover:border-border focus-visible:outline-accent/70 sm:mb-0"
+                style="pointer-events: all !important"
+                @click="resetMinimap"
+              >
+                <span class="i-lucide:undo-2 w-5 h-5" aria-hidden="true" />
+              </button>
+            </template>
+
             <template #menuIcon="{ isOpen }">
-              <span v-if="isOpen" class="i-carbon:close w-6 h-6" aria-hidden="true" />
-              <span v-else class="i-carbon:overflow-menu-vertical w-6 h-6" aria-hidden="true" />
+              <span v-if="isOpen" class="i-lucide:x w-6 h-6" aria-hidden="true" />
+              <span v-else class="i-lucide:ellipsis-vertical w-6 h-6" aria-hidden="true" />
             </template>
             <template #optionCsv>
-              <span
-                class="i-carbon:csv w-6 h-6 text-fg-subtle"
-                style="pointer-events: none"
-                aria-hidden="true"
-              />
+              <span class="text-fg-subtle font-mono pointer-events-none">CSV</span>
             </template>
             <template #optionImg>
-              <span
-                class="i-carbon:png w-6 h-6 text-fg-subtle"
-                style="pointer-events: none"
-                aria-hidden="true"
-              />
+              <span class="text-fg-subtle font-mono pointer-events-none">PNG</span>
             </template>
             <template #optionSvg>
-              <span
-                class="i-carbon:svg w-6 h-6 text-fg-subtle"
-                style="pointer-events: none"
-                aria-hidden="true"
-              />
+              <span class="text-fg-subtle font-mono pointer-events-none">SVG</span>
             </template>
 
             <template #annotator-action-close>
               <span
-                class="i-carbon:close w-6 h-6 text-fg-subtle"
+                class="i-lucide:x w-6 h-6 text-fg-subtle"
                 style="pointer-events: none"
                 aria-hidden="true"
               />
             </template>
             <template #annotator-action-color="{ color }">
-              <span class="i-carbon:color-palette w-6 h-6" :style="{ color }" aria-hidden="true" />
+              <span class="i-lucide:palette w-6 h-6" :style="{ color }" aria-hidden="true" />
             </template>
             <template #annotator-action-undo>
               <span
-                class="i-carbon:undo w-6 h-6 text-fg-subtle"
+                class="i-lucide:undo-2 w-6 h-6 text-fg-subtle"
                 style="pointer-events: none"
                 aria-hidden="true"
               />
             </template>
             <template #annotator-action-redo>
               <span
-                class="i-carbon:redo w-6 h-6 text-fg-subtle"
+                class="i-lucide:redo-2 w-6 h-6 text-fg-subtle"
                 style="pointer-events: none"
                 aria-hidden="true"
               />
             </template>
             <template #annotator-action-delete>
               <span
-                class="i-carbon:trash-can w-6 h-6 text-fg-subtle"
+                class="i-lucide:trash w-6 h-6 text-fg-subtle"
                 style="pointer-events: none"
                 aria-hidden="true"
               />
@@ -1709,13 +2033,23 @@ watch(selectedMetric, value => {
             <template #optionAnnotator="{ isAnnotator }">
               <span
                 v-if="isAnnotator"
-                class="i-carbon:edit-off w-6 h-6 text-fg-subtle"
+                class="i-lucide:pen-off w-6 h-6 text-fg-subtle"
                 style="pointer-events: none"
                 aria-hidden="true"
               />
               <span
                 v-else
-                class="i-carbon:edit w-6 h-6 text-fg-subtle"
+                class="i-lucide:pen w-6 h-6 text-fg-subtle"
+                style="pointer-events: none"
+                aria-hidden="true"
+              />
+            </template>
+            <template #optionAltCopy>
+              <span
+                class="w-6 h-6"
+                :class="
+                  copied ? 'i-lucide:check text-accent' : 'i-lucide:person-standing text-fg-subtle'
+                "
                 style="pointer-events: none"
                 aria-hidden="true"
               />
@@ -1766,7 +2100,7 @@ watch(selectedMetric, value => {
 @media screen and (min-width: 767px) {
   #trends-chart .vue-data-ui-refresh-button {
     top: -0.6rem !important;
-    left: calc(100% + 2rem) !important;
+    left: calc(100% + 4rem) !important;
   }
 }
 

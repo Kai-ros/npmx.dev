@@ -3,8 +3,11 @@ import sanitizeHtml from 'sanitize-html'
 import { hasProtocol } from 'ufo'
 import type { ReadmeResponse, TocItem } from '#shared/types/readme'
 import { convertBlobOrFileToRawUrl, type RepositoryInfo } from '#shared/utils/git-providers'
-import { highlightCodeSync } from './shiki'
+import { decodeHtmlEntities } from '#shared/utils/html'
 import { convertToEmoji } from '#shared/utils/emoji'
+import { toProxiedImageUrl } from '#server/utils/image-proxy'
+
+import { highlightCodeSync } from './shiki'
 
 /**
  * Playground provider configuration
@@ -13,6 +16,7 @@ interface PlaygroundProvider {
   id: string // Provider identifier
   name: string
   domains: string[] // Associated domains
+  paths?: string[]
   icon?: string // Provider icon name
 }
 
@@ -74,6 +78,32 @@ const PLAYGROUND_PROVIDERS: PlaygroundProvider[] = [
     domains: ['vite.new'],
     icon: 'vite',
   },
+  {
+    id: 'typescript-playground',
+    name: 'TypeScript Playground',
+    domains: ['typescriptlang.org'],
+    paths: ['/play'],
+    icon: 'typescript',
+  },
+  {
+    id: 'solid-playground',
+    name: 'Solid Playground',
+    domains: ['playground.solidjs.com'],
+    icon: 'solid',
+  },
+  {
+    id: 'svelte-playground',
+    name: 'Svelte Playground',
+    domains: ['svelte.dev'],
+    paths: ['/repl', '/playground'],
+    icon: 'svelte',
+  },
+  {
+    id: 'tailwind-playground',
+    name: 'Tailwind Play',
+    domains: ['play.tailwindcss.com'],
+    icon: 'tailwindcss',
+  },
 ]
 
 /**
@@ -86,7 +116,10 @@ function matchPlaygroundProvider(url: string): PlaygroundProvider | null {
 
     for (const provider of PLAYGROUND_PROVIDERS) {
       for (const domain of provider.domains) {
-        if (hostname === domain || hostname.endsWith(`.${domain}`)) {
+        if (
+          (hostname === domain || hostname.endsWith(`.${domain}`)) &&
+          (!provider.paths || provider.paths.some(path => parsed.pathname.startsWith(path)))
+        ) {
           return provider
         }
       }
@@ -161,8 +194,21 @@ const ALLOWED_ATTR: Record<string, string[]> = {
   'p': ['align'],
 }
 
-// GitHub-style callout types
-// Format: > [!NOTE], > [!TIP], > [!IMPORTANT], > [!WARNING], > [!CAUTION]
+/**
+ * Strip all HTML tags from a string, looping until stable to prevent
+ * incomplete sanitization from nested/interleaved tags
+ * (e.g. `<scr<script>ipt>` → `<script>` after one pass).
+ */
+function stripHtmlTags(text: string): string {
+  const tagPattern = /<[^>]*>/g
+  let result = text
+  let previous: string
+  do {
+    previous = result
+    result = result.replace(tagPattern, '')
+  } while (result !== previous)
+  return result
+}
 
 /**
  * Generate a GitHub-style slug from heading text.
@@ -173,8 +219,7 @@ const ALLOWED_ATTR: Record<string, string[]> = {
  * - Collapse multiple hyphens
  */
 function slugify(text: string): string {
-  return text
-    .replace(/<[^>]*>/g, '') // Strip HTML tags
+  return stripHtmlTags(text)
     .toLowerCase()
     .trim()
     .replace(/\s+/g, '-') // Spaces to hyphens
@@ -195,8 +240,10 @@ const reservedPathsNpmJs = [
   'policies',
 ]
 
+const npmJsHosts = new Set(['www.npmjs.com', 'npmjs.com', 'www.npmjs.org', 'npmjs.org'])
+
 const isNpmJsUrlThatCanBeRedirected = (url: URL) => {
-  if (url.host !== 'www.npmjs.com' && url.host !== 'npmjs.com') {
+  if (!npmJsHosts.has(url.host)) {
     return false
   }
 
@@ -289,12 +336,23 @@ function resolveUrl(url: string, packageName: string, repoInfo?: RepositoryInfo)
 // Convert blob/src URLs to raw URLs for images across all providers
 // e.g. https://github.com/nuxt/nuxt/blob/main/.github/assets/banner.svg
 //   → https://github.com/nuxt/nuxt/raw/main/.github/assets/banner.svg
+//
+// External images are proxied through /api/registry/image-proxy to prevent
+// third-party servers from collecting visitor IP addresses and User-Agent data.
+// Proxy URLs are HMAC-signed to prevent open proxy abuse.
+// See: https://github.com/npmx-dev/npmx.dev/issues/1138
 function resolveImageUrl(url: string, packageName: string, repoInfo?: RepositoryInfo): string {
-  const resolved = resolveUrl(url, packageName, repoInfo)
-  if (repoInfo?.provider) {
-    return convertBlobOrFileToRawUrl(resolved, repoInfo.provider)
+  // Skip already-proxied URLs (from a previous resolveImageUrl call in the
+  // marked renderer — sanitizeHtml transformTags may call this again)
+  if (url.startsWith('/api/registry/image-proxy')) {
+    return url
   }
-  return resolved
+  const resolved = resolveUrl(url, packageName, repoInfo)
+  const rawUrl = repoInfo?.provider
+    ? convertBlobOrFileToRawUrl(resolved, repoInfo.provider)
+    : resolved
+  const { imageProxySecret } = useRuntimeConfig()
+  return toProxiedImageUrl(rawUrl, imageProxySecret)
 }
 
 // Helper to prefix id attributes with 'user-content-'
@@ -319,7 +377,7 @@ export async function renderReadmeHtml(
   packageName: string,
   repoInfo?: RepositoryInfo,
 ): Promise<ReadmeResponse> {
-  if (!content) return { html: '', md: '', playgroundLinks: [], toc: [] }
+  if (!content) return { html: '', playgroundLinks: [], toc: [] }
 
   const shiki = await getShikiHighlighter()
   const renderer = new marked.Renderer()
@@ -360,13 +418,14 @@ export async function renderReadmeHtml(
     // (e.g., #install, #dependencies, #versions are used by the package page)
     const id = `user-content-${uniqueSlug}`
 
-    // Collect TOC item with plain text (HTML stripped)
-    const plainText = text.replace(/<[^>]*>/g, '').trim()
+    // Collect TOC item with plain text (HTML stripped, entities decoded)
+    const plainText = decodeHtmlEntities(stripHtmlTags(text).trim())
     if (plainText) {
       toc.push({ text: plainText, id, depth })
     }
 
-    return `<h${semanticLevel} id="${id}" data-level="${depth}">${text}</h${semanticLevel}>\n`
+    /** The link href uses the unique slug WITHOUT the 'user-content-' prefix, because that will later be added for all links. */
+    return `<h${semanticLevel} id="${id}" data-level="${depth}"><a href="#${uniqueSlug}">${plainText}</a></h${semanticLevel}>\n`
   }
 
   // Syntax highlighting for code blocks (uses shared highlighter)
@@ -374,8 +433,8 @@ export async function renderReadmeHtml(
     const html = highlightCodeSync(shiki, text, lang || 'text')
     // Add copy button
     return `<div class="readme-code-block" >
-<button type="button" class="readme-copy-button" aria-label="Copy code" check-icon="i-carbon:checkmark" copy-icon="i-carbon:copy" data-copy>
-<span class="i-carbon:copy" aria-hidden="true"></span>
+<button type="button" class="readme-copy-button" aria-label="Copy code" check-icon="i-lucide:check" copy-icon="i-lucide:copy" data-copy>
+<span class="i-lucide:copy" aria-hidden="true"></span>
 <span class="sr-only">Copy code</span>
 </button>
 ${html}
@@ -392,33 +451,19 @@ ${html}
 
   // Resolve link URLs, add security attributes, and collect playground links
   renderer.link = function ({ href, title, tokens }: Tokens.Link) {
-    const resolvedHref = resolveUrl(href, packageName, repoInfo)
     const text = this.parser.parseInline(tokens)
     const titleAttr = title ? ` title="${title}"` : ''
+    let plainText = stripHtmlTags(text).trim()
 
-    const isExternal = resolvedHref.startsWith('http://') || resolvedHref.startsWith('https://')
-    const relAttr = isExternal ? ' rel="nofollow noreferrer noopener"' : ''
-    const targetAttr = isExternal ? ' target="_blank"' : ''
-
-    // Check if this is a playground link
-    const provider = matchPlaygroundProvider(resolvedHref)
-    if (provider && !seenUrls.has(resolvedHref)) {
-      seenUrls.add(resolvedHref)
-
-      // Extract label from link text (strip HTML tags for plain text)
-      const plainText = text.replace(/<[^>]*>/g, '').trim()
-
-      collectedLinks.push({
-        url: resolvedHref,
-        provider: provider.id,
-        providerName: provider.name,
-        label: plainText || title || provider.name,
-      })
+    // If plain text is empty, check if we have an image with alt text
+    if (!plainText && tokens.length === 1 && tokens[0]?.type === 'image') {
+      plainText = tokens[0].text
     }
 
-    const hrefValue = resolvedHref.startsWith('#') ? resolvedHref.toLowerCase() : resolvedHref
+    const intermediateTitleAttr =
+      plainText || title ? ` data-title-intermediate="${plainText || title}"` : ''
 
-    return `<a href="${hrefValue}"${titleAttr}${relAttr}${targetAttr}>${text}</a>`
+    return `<a href="${href}"${titleAttr}${intermediateTitleAttr}>${text}</a>`
   }
 
   // GitHub-style callouts: > [!NOTE], > [!TIP], etc.
@@ -494,11 +539,35 @@ ${html}
         return { tagName, attribs }
       },
       a: (tagName, attribs) => {
+        if (!attribs.href) {
+          return { tagName, attribs }
+        }
+
+        const resolvedHref = resolveUrl(attribs.href, packageName, repoInfo)
+
+        const provider = matchPlaygroundProvider(resolvedHref)
+        if (provider && !seenUrls.has(resolvedHref)) {
+          seenUrls.add(resolvedHref)
+
+          collectedLinks.push({
+            url: resolvedHref,
+            provider: provider.id,
+            providerName: provider.name,
+            /**
+             * We need to set some data attribute before hand because `transformTags` doesn't
+             * provide the text of the element. This will automatically be removed, because there
+             * is an allow list for link attributes.
+             * */
+            label: decodeHtmlEntities(attribs['data-title-intermediate'] || provider.name),
+          })
+        }
+
         // Add security attributes for external links
-        if (attribs.href && hasProtocol(attribs.href, { acceptRelative: true })) {
+        if (resolvedHref && hasProtocol(resolvedHref, { acceptRelative: true })) {
           attribs.rel = 'nofollow noreferrer noopener'
           attribs.target = '_blank'
         }
+        attribs.href = resolvedHref
         return { tagName, attribs }
       },
       div: prefixId,
@@ -511,7 +580,7 @@ ${html}
 
   return {
     html: convertToEmoji(sanitized),
-    md: content,
+    mdExists: Boolean(content),
     playgroundLinks: collectedLinks,
     toc,
   }
