@@ -1,9 +1,11 @@
-export function packageRoute(packageName: string, version?: string | null) {
-  const [org, name] = packageName.startsWith('@') ? packageName.split('/') : [null, packageName]
+import type { RouteLocationRaw } from 'vue-router'
+
+export function packageRoute(packageName: string, version?: string | null): RouteLocationRaw {
+  const [org, name = ''] = packageName.startsWith('@') ? packageName.split('/') : ['', packageName]
 
   if (version) {
     return {
-      name: 'package-version' as const,
+      name: 'package-version',
       params: {
         org,
         name,
@@ -13,10 +15,27 @@ export function packageRoute(packageName: string, version?: string | null) {
   }
 
   return {
-    name: 'package' as const,
+    name: 'package',
     params: {
       org,
       name,
+    },
+  }
+}
+
+export function diffRoute(
+  packageName: string,
+  fromVersion: string,
+  toVersion: string,
+): RouteLocationRaw {
+  const [org, name = ''] = packageName.startsWith('@') ? packageName.split('/') : ['', packageName]
+
+  return {
+    name: 'diff',
+    params: {
+      org: org || undefined,
+      packageName: name,
+      versionRange: `${fromVersion}...${toVersion}`,
     },
   }
 }
