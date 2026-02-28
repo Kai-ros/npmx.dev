@@ -1,4 +1,4 @@
-import type { AtprotoProfile } from '#server/api/pds-users.get.ts'
+import type { AtprotoProfile } from '~~/server/api/atproto/pds-users.get'
 
 interface GraphLink {
   source: string

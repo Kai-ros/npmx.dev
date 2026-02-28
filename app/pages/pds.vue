@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AtprotoProfile } from '#server/api/pds-users.get.ts'
+import type { AtprotoProfile } from '#server/api/atproto/users.get.ts'
 
 const router = useRouter()
 const canGoBack = useCanGoBack()
@@ -25,9 +25,12 @@ const handleImageError = (handle: string) => {
   brokenImages.value.add(handle)
 }
 
-const { data: pdsUsers, status: pdsStatus } = useLazyFetch<AtprotoProfile[]>('/api/pds-users', {
-  default: () => [],
-})
+const { data: pdsUsers, status: pdsStatus } = useLazyFetch<AtprotoProfile[]>(
+  '/api/atproto/pds-users',
+  {
+    default: () => [],
+  },
+)
 
 const usersWithAvatars = computed(() => {
   return pdsUsers.value.filter(user => user.avatar && !brokenImages.value.has(user.handle))
