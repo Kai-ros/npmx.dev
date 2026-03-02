@@ -1183,13 +1183,12 @@
     },
     "community": {
       "title": "Who is here",
-      "description": "They are already calling npmx.social home.",
-      "account_count": "Home to {count} accounts",
+      "description": "Some of the {count} accounts that are already calling npmx.social home:",
       "loading": "Loading PDS community...",
       "error": "Failed to load PDS community.",
       "empty": "No community members to display.",
       "view_profile": "View {handle}'s profile",
-      "new_accounts": "+{count} new to the atmosphere"
+      "new_accounts": "...plus {count} more that are new to the atmosphere"
     }
   },
   "privacy_policy": {

@@ -3556,9 +3556,6 @@
             "description": {
               "type": "string"
             },
-            "account_count": {
-              "type": "string"
-            },
             "loading": {
               "type": "string"
             },

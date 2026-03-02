@@ -136,13 +136,9 @@ const totalAccounts = computed(() => pdsUsers.value.length)
           <h2 id="community-heading" class="text-lg text-fg uppercase tracking-wider mb-4">
             {{ $t('pds.community.title') }}
           </h2>
-          <p class="text-fg-muted leading-relaxed mb-2">
-            {{ $t('pds.community.description') }}
+          <p class="text-fg-muted leading-relaxed mb-6">
+            {{ $t('pds.community.description', { count: totalAccounts }) }}
           </p>
-          <p v-if="pdsStatus === 'success' && totalAccounts > 0" class="text-fg font-medium mb-6">
-            {{ $t('pds.community.account_count', { count: totalAccounts }) }}
-          </p>
-          <div v-else class="mb-6" />
 
           <div v-if="pdsStatus === 'pending'" class="text-fg-subtle text-sm" role="status">
             {{ $t('pds.community.loading') }}
@@ -184,15 +180,12 @@ const totalAccounts = computed(() => pdsUsers.value.length)
                 </a>
               </li>
             </ul>
-            <div
+            <p
               v-if="usersWithoutAvatars.length"
-              class="flex items-center justify-center gap-2 mt-4 text-fg-muted text-sm"
+              class="text-center mt-4 text-fg-muted text-sm"
             >
-              <AppMark class="w-5 h-auto" />
-              <span>{{
-                $t('pds.community.new_accounts', { count: usersWithoutAvatars.length })
-              }}</span>
-            </div>
+              {{ $t('pds.community.new_accounts', { count: usersWithoutAvatars.length }) }}
+            </p>
           </div>
         </div>
       </section>
