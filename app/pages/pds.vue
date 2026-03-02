@@ -122,6 +122,15 @@ const totalAccounts = computed(() => pdsUsers.value.length)
               </span>
             </li>
           </ul>
+          <div class="mt-6">
+            <LinkBase
+              to="https://docs.npmx.dev/integrations/atmosphere"
+              class="gap-2 text-sm text-fg-muted hover:text-fg"
+            >
+              <span class="i-lucide:book-open w-4 h-4" aria-hidden="true" />
+              {{ $t('pds.server.learn_more') }}
+            </LinkBase>
+          </div>
         </div>
         <div aria-labelledby="community-heading">
           <h2 id="community-heading" class="text-lg text-fg uppercase tracking-wider mb-4">
@@ -130,10 +139,7 @@ const totalAccounts = computed(() => pdsUsers.value.length)
           <p class="text-fg-muted leading-relaxed mb-2">
             {{ $t('pds.community.description') }}
           </p>
-          <p
-            v-if="pdsStatus === 'success' && totalAccounts > 0"
-            class="text-fg font-medium mb-6"
-          >
+          <p v-if="pdsStatus === 'success' && totalAccounts > 0" class="text-fg font-medium mb-6">
             {{ $t('pds.community.account_count', { count: totalAccounts }) }}
           </p>
           <div v-else class="mb-6" />
@@ -151,11 +157,7 @@ const totalAccounts = computed(() => pdsUsers.value.length)
             <ul
               class="grid grid-cols-[repeat(auto-fill,48px)] justify-center gap-2 list-none px-8 py-2"
             >
-              <li
-                v-for="user in usersWithAvatars"
-                :key="user.handle"
-                class="block group relative"
-              >
+              <li v-for="user in usersWithAvatars" :key="user.handle" class="block group relative">
                 <a
                   :href="`https://bsky.app/profile/${user.handle}`"
                   target="_blank"
@@ -187,7 +189,9 @@ const totalAccounts = computed(() => pdsUsers.value.length)
               class="flex items-center justify-center gap-2 mt-4 text-fg-muted text-sm"
             >
               <AppMark class="w-5 h-auto" />
-              <span>{{ $t('pds.community.new_accounts', { count: usersWithoutAvatars.length }) }}</span>
+              <span>{{
+                $t('pds.community.new_accounts', { count: usersWithoutAvatars.length })
+              }}</span>
             </div>
           </div>
         </div>

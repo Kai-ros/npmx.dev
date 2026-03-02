@@ -3540,6 +3540,9 @@
             },
             "privacy_value": {
               "type": "string"
+            },
+            "learn_more": {
+              "type": "string"
             }
           },
           "additionalProperties": false

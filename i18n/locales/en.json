@@ -1178,7 +1178,8 @@
       "infrastructure_label": "Infrastructure:",
       "infrastructure_value": "Hosted on Hetzner",
       "privacy_label": "Privacy:",
-      "privacy_value": "Subject to strict EU Data Protection laws"
+      "privacy_value": "Subject to strict EU Data Protection laws",
+      "learn_more": "Learn how npmx uses the Atmosphere"
     },
     "community": {
       "title": "Who is here",
